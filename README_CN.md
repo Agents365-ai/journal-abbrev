@@ -84,6 +84,37 @@ python3 jabbrv.py update-cache
 
 - Python 3.6+（无需安装第三方包）
 
+## 支持作者
+
+如果这个项目对你有帮助，欢迎支持作者：
+
+<table>
+  <tr>
+    <td align="center">
+      <img src="https://raw.githubusercontent.com/Agents365-ai/images_payment/main/qrcode/wechat-pay.png" width="180" alt="微信支付">
+      <br>
+      <b>微信支付</b>
+    </td>
+    <td align="center">
+      <img src="https://raw.githubusercontent.com/Agents365-ai/images_payment/main/qrcode/alipay.png" width="180" alt="支付宝">
+      <br>
+      <b>支付宝</b>
+    </td>
+    <td align="center">
+      <img src="https://raw.githubusercontent.com/Agents365-ai/images_payment/main/qrcode/buymeacoffee.png" width="180" alt="Buy Me a Coffee">
+      <br>
+      <b>Buy Me a Coffee</b>
+    </td>
+  </tr>
+</table>
+
+## 作者
+
+**Agents365-ai**
+
+- B站: https://space.bilibili.com/441831884
+- GitHub: https://github.com/Agents365-ai
+
 ## 许可证
 
 MIT
