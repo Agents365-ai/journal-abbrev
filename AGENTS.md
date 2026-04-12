@@ -106,11 +106,13 @@ through `jabbrv`.
 ## Agent-platform notes
 
 This file follows the `AGENTS.md` convention. It is auto-discovered by OpenAI
-Codex CLI, Claude Code (as a fallback to `CLAUDE.md`), Gemini CLI, Cursor
-(recent versions), Aider, and other agent runtimes that scan the repository
-root. For platforms that use their own rule-file conventions (GitHub Copilot
-Chat, Continue.dev, Windsurf), see the **Installation** section of `README.md`
-for one-line snippets that point those files at this one.
+Codex CLI, Gemini CLI (as a fallback to `GEMINI.md`), Cursor (recent versions),
+Aider, and other agent runtimes that scan the repository root. For platforms
+that use their own rule-file conventions (GitHub Copilot Chat, Continue.dev,
+Windsurf), see the **Installation** section of `README.md` for one-line
+snippets that point those files at this one.
 
-For Claude Code, OpenClaw, ClawHub, and SkillsMP, the canonical skill manifest
-lives in `SKILL.md`. This file and that one describe the same tool.
+**Claude Code does not read `AGENTS.md`.** For Claude Code, OpenClaw, ClawHub,
+and SkillsMP, the canonical skill manifest lives in `SKILL.md` — those
+platforms discover and load the skill through that file instead. This file and
+`SKILL.md` describe the same tool; the two are kept thin to minimize drift.

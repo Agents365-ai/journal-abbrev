@@ -48,11 +48,14 @@ These platforms follow the [`agents.md`](https://agents.md) convention and
 auto-discover the `AGENTS.md` file at the repository root. Clone anywhere, then
 tell the agent to use the tool from that path — the file does the rest.
 
+> **Note for Claude Code users:** Claude Code does **not** read `AGENTS.md`.
+> Use Tier 1 above (`SKILL.md` at `~/.claude/skills/journal-abbrev`) — this is
+> the only supported path for Claude Code.
+
 | Platform | Notes |
 |---|---|
 | **OpenAI Codex CLI** | `AGENTS.md` is the native convention |
 | **Gemini CLI** | Reads `AGENTS.md` as a fallback to `GEMINI.md` |
-| **Claude Code** | Reads `AGENTS.md` as a fallback to `CLAUDE.md` (Tier 1 is still preferred) |
 | **Cursor** (recent) | Honors `AGENTS.md` when no `.cursor/rules` file is present |
 | **Aider** | Respects `AGENTS.md` as project conventions |
 | **Any other agent** that implements the convention | Works automatically |

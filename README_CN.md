@@ -46,11 +46,14 @@
 `AGENTS.md`。克隆到任意位置，告诉智能体从该路径使用此工具即可——其余工作由
 `AGENTS.md` 文件完成。
 
+> **Claude Code 用户请注意：** Claude Code **不会**读取 `AGENTS.md`，
+> 请使用上面的层级 1（把仓库放到 `~/.claude/skills/journal-abbrev`
+> 让 Claude Code 通过 `SKILL.md` 发现），这是 Claude Code 唯一受支持的方式。
+
 | 平台 | 说明 |
 |---|---|
 | **OpenAI Codex CLI** | `AGENTS.md` 是其原生约定 |
 | **Gemini CLI** | 在没有 `GEMINI.md` 时会回退到 `AGENTS.md` |
-| **Claude Code** | 在没有 `CLAUDE.md` 时会回退到 `AGENTS.md`（更推荐层级 1 的方式） |
 | **Cursor**（近期版本） | 在没有 `.cursor/rules` 时会识别 `AGENTS.md` |
 | **Aider** | 将 `AGENTS.md` 识别为项目约定 |
 | **其他支持该约定的智能体** | 自动生效 |
