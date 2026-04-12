@@ -32,7 +32,7 @@ from urllib.request import Request, urlopen
 # Constants
 # ---------------------------------------------------------------------------
 
-CLI_VERSION = "1.0.1"
+CLI_VERSION = "1.0.2"
 SCHEMA_VERSION = "1.0.0"
 
 CACHE_DIR = Path(__file__).parent / "cache"
