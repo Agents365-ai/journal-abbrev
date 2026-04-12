@@ -5,9 +5,9 @@ allowed-tools: Bash, Read, Write, Edit, Glob, Grep
 # --- Claude Code fields above, OpenClaw/SkillsMP fields below ---
 author: Agents365-ai
 category: Academic Research
-version: 0.1.0
+version: 1.0.1
 created: 2026-03-29
-updated: 2026-03-29
+updated: 2026-04-12
 github: https://github.com/Agents365-ai/journal-abbrev
 homepage: https://github.com/Agents365-ai/journal-abbrev
 metadata:
