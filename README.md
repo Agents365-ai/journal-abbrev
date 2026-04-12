@@ -22,16 +22,8 @@ A Claude Code skill for looking up standard journal/magazine name abbreviations.
 
 ## Installation
 
-`jabbrv` is an **agent-native CLI** — it returns a stable JSON envelope, has a
-`schema` subcommand, and distinct exit codes. That means every AI agent
-platform uses the exact same invocation (`python3 jabbrv.py <cmd>`). The only
-thing that varies is *how the agent discovers the tool exists*. Pick your tier
-below.
-
-### Tier 1 — Skill-aware platforms (read `SKILL.md`)
-
-These platforms auto-load `SKILL.md` and wire the skill into the agent without
-any extra context file.
+`journal-abbrev` is a skill distributed via `SKILL.md`. Install it into any
+`SKILL.md`-aware platform:
 
 | Platform | Install |
 |---|---|
@@ -42,58 +34,16 @@ any extra context file.
 | **ClawHub** | `clawhub install journal-abbrev` |
 | **SkillsMP** | Search for `journal-abbrev` on [skillsmp.com](https://skillsmp.com) |
 
-### Tier 2 — `AGENTS.md`-aware platforms
-
-These platforms follow the [`agents.md`](https://agents.md) convention and
-auto-discover the `AGENTS.md` file at the repository root. Clone anywhere, then
-tell the agent to use the tool from that path — the file does the rest.
-
-> **Note for Claude Code users:** Claude Code does **not** read `AGENTS.md`.
-> Use Tier 1 above (`SKILL.md` at `~/.claude/skills/journal-abbrev`) — this is
-> the only supported path for Claude Code.
-
-| Platform | Notes |
-|---|---|
-| **OpenAI Codex CLI** | `AGENTS.md` is the native convention |
-| **Gemini CLI** | Reads `AGENTS.md` as a fallback to `GEMINI.md` |
-| **Cursor** (recent) | Honors `AGENTS.md` when no `.cursor/rules` file is present |
-| **Aider** | Respects `AGENTS.md` as project conventions |
-| **Any other agent** that implements the convention | Works automatically |
-
-Install example (project-level):
-
-```bash
-git clone https://github.com/Agents365-ai/journal-abbrev.git vendor/journal-abbrev
-# In your next agent session, point at vendor/journal-abbrev/AGENTS.md or
-# simply tell the agent: "use the journal-abbrev tool in vendor/journal-abbrev"
-```
-
-### Tier 3 — Platform-specific rule files
-
-For agents that use their own rule-file convention, add a one-line pointer to
-`AGENTS.md` instead of duplicating the content.
-
-| Platform | File to edit | Snippet to add |
-|---|---|---|
-| **GitHub Copilot Chat** | `.github/copilot-instructions.md` | `See ./vendor/journal-abbrev/AGENTS.md for how to use the journal-abbrev tool.` |
-| **Continue.dev** | `.continue/config.yaml` under `systemMessage:` | `"For journal abbreviation tasks, follow vendor/journal-abbrev/AGENTS.md."` |
-| **Windsurf** | `.windsurfrules` | `When the user asks about journal abbreviations, use vendor/journal-abbrev/AGENTS.md.` |
-| **Cursor** (legacy) | `.cursor/rules/journal-abbrev.mdc` | A one-line rule pointing at `vendor/journal-abbrev/AGENTS.md` |
-
-### Tier 4 — Manual / any shell
-
-No agent? No rule file? The CLI is self-contained. Clone it anywhere and run
-it directly:
+Or clone it anywhere and run the CLI directly — it is pure Python 3.9+
+standard library with no third-party dependencies, and works on macOS, Linux,
+and Windows:
 
 ```bash
 git clone https://github.com/Agents365-ai/journal-abbrev.git
 cd journal-abbrev
 python3 jabbrv.py lookup "Nature Medicine"
-python3 jabbrv.py schema              # full machine-readable contract
+python3 jabbrv.py schema              # full machine-readable CLI contract
 ```
-
-It is pure Python 3.9+ standard library — no `pip install`, no virtualenv, no
-third-party dependencies. Works on macOS, Linux, and Windows.
 
 ## Usage
 

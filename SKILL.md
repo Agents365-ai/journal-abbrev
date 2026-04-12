@@ -26,12 +26,6 @@ Look up journal/magazine name abbreviations using a multi-source cascade: JabRef
 
 **Critical rule:** Always use `jabbrv.py` for lookups. Never guess abbreviations — even common journals have non-obvious abbreviations.
 
-> **Using a platform that isn't SKILL.md-aware?** This repo also ships an
-> `AGENTS.md` at its root that describes the same tool in the cross-platform
-> [`agents.md`](https://agents.md) convention. OpenAI Codex CLI, Gemini CLI,
-> Cursor, Aider, and others auto-discover it. See the Installation section of
-> `README.md` for the full tier list.
-
 ## Quick Reference
 
 | User wants... | Command |
