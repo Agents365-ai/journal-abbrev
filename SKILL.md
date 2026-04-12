@@ -33,13 +33,46 @@ Look up journal/magazine name abbreviations using a multi-source cascade: JabRef
 | Abbreviate a journal name | `python3 jabbrv.py abbrev "Nature Medicine"` |
 | Expand an abbreviation | `python3 jabbrv.py expand "Nat. Med."` |
 | Auto-detect direction | `python3 jabbrv.py lookup "J. Am. Chem. Soc."` |
-| Fuzzy search | `python3 jabbrv.py search "biolog chem"` |
+| Fuzzy search (paginated) | `python3 jabbrv.py search "biolog chem" --limit 10 --offset 0` |
 | Process a .bib file | `python3 jabbrv.py bib refs.bib` |
+| Preview .bib changes (no write) | `python3 jabbrv.py bib refs.bib --dry-run` |
+| Explicit .bib output path | `python3 jabbrv.py bib refs.bib --output out.bib` |
 | Expand .bib abbreviations | `python3 jabbrv.py bib refs.bib --expand` |
 | Batch text list | `python3 jabbrv.py batch journals.txt` |
-| Update local cache | `python3 jabbrv.py update-cache` |
+| Batch as NDJSON stream | `python3 jabbrv.py batch journals.txt --stream` |
+| Inspect cache state | `python3 jabbrv.py cache status` |
+| Download missing cache files | `python3 jabbrv.py cache update` |
+| Rebuild cache from scratch | `python3 jabbrv.py cache rebuild` |
+| Machine-readable CLI contract | `python3 jabbrv.py schema` |
+| Schema for one subcommand | `python3 jabbrv.py schema lookup` |
 
-Add `--json` to any command for machine-readable output.
+### Output format
+
+Stdout is a stable JSON envelope when the CLI is **not** attached to a terminal
+(piped or captured by an agent), and a human table/indented view when run on a
+TTY. To force a format: `--format json|table|human|auto`. `--json` remains as a
+back-compat alias for `--format json`. Flags may appear before or after the
+subcommand.
+
+Envelope shape (always the same fields for every subcommand):
+
+- Success: `{ "ok": true, "data": ..., "meta": { "schema_version", "cli_version", "cache", "latency_ms" } }`
+- Partial success (batch): `{ "ok": "partial", "data": { "succeeded": [...], "failed": [...] }, "meta": {...} }`
+- Error: `{ "ok": false, "error": { "code", "message", "retryable", ... }, "meta": {...} }`
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0`  | success (including partial success) |
+| `1`  | runtime / upstream error |
+| `2`  | validation / bad input (missing file, bad flag) |
+| `3`  | not found (the looked-up journal does not exist) |
+
+### Error codes (inside `error.code`)
+
+`not_found`, `file_not_found`, `validation_error`, `runtime_error`. Each carries
+a `retryable: bool` so agents can branch retry logic.
 
 ## Workflow
 

@@ -65,24 +65,43 @@ python3 jabbrv.py abbrev "Journal of Biological Chemistry"
 # 缩写 → 全名
 python3 jabbrv.py expand "Nat. Med."
 
-# 模糊搜索
-python3 jabbrv.py search "biolog chem"
+# 模糊搜索（支持分页）
+python3 jabbrv.py search "biolog chem" --limit 10 --offset 0
 
-# 处理 BibTeX 文件
-python3 jabbrv.py bib refs.bib
+# 处理 BibTeX 文件（先预览再写入）
+python3 jabbrv.py bib refs.bib --dry-run
+python3 jabbrv.py bib refs.bib --output refs_final.bib
 
 # 批量查询（每行一个期刊名）
 python3 jabbrv.py batch journals.txt
+python3 jabbrv.py batch journals.txt --stream   # NDJSON 流式输出
 
-# 更新本地缓存
-python3 jabbrv.py update-cache
+# 缓存管理
+python3 jabbrv.py cache status     # 查看本地缓存状态
+python3 jabbrv.py cache update     # 下载缺失的缓存文件
+python3 jabbrv.py cache rebuild    # 删除并重新下载全部缓存
+
+# 机器可读的命令契约（供 AI 智能体或自动化工具使用）
+python3 jabbrv.py schema
+python3 jabbrv.py schema lookup
 ```
 
-所有命令均支持 `--json` 参数输出 JSON 格式。
+### Agent-native 输出契约
+
+当标准输出不是终端（例如被管道捕获、被智能体运行时读取）时，`stdout` 默认输出
+稳定的 JSON 信封；在终端下则输出人类友好的表格或缩进视图。所有响应共用同一信封结构：
+
+- 成功: `{"ok": true, "data": ..., "meta": {"schema_version", "cli_version", "cache", "latency_ms"}}`
+- 部分成功（batch）: `{"ok": "partial", "data": {"succeeded": [...], "failed": [...]}}`
+- 错误: `{"ok": false, "error": {"code", "message", "retryable", ...}}`
+
+退出码按失败类别区分：`0` 成功、`1` 运行时错误、`2` 参数/输入错误、`3` 未找到。
+可用 `--format json|table|human` 强制格式（`--json` 是旧版兼容别名）；
+所有全局参数可以放在子命令前或后。
 
 ## 依赖
 
-- Python 3.6+（无需安装第三方包）
+- Python 3.9+（无需安装第三方包）
 
 ## 支持作者
 

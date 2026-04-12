@@ -65,24 +65,44 @@ python3 jabbrv.py abbrev "Journal of Biological Chemistry"
 # Abbreviation → full name
 python3 jabbrv.py expand "Nat. Med."
 
-# Fuzzy search
-python3 jabbrv.py search "biolog chem"
+# Fuzzy search (paginated)
+python3 jabbrv.py search "biolog chem" --limit 10 --offset 0
 
-# Process BibTeX file
-python3 jabbrv.py bib refs.bib
+# Process BibTeX file (preview without writing first)
+python3 jabbrv.py bib refs.bib --dry-run
+python3 jabbrv.py bib refs.bib --output refs_final.bib
 
 # Batch lookup (one journal per line)
 python3 jabbrv.py batch journals.txt
+python3 jabbrv.py batch journals.txt --stream   # NDJSON, one result per line
 
-# Update local cache
-python3 jabbrv.py update-cache
+# Cache management
+python3 jabbrv.py cache status     # inspect local cache
+python3 jabbrv.py cache update     # download missing files
+python3 jabbrv.py cache rebuild    # delete + redownload everything
+
+# Machine-readable CLI contract (for AI agents and automation)
+python3 jabbrv.py schema
+python3 jabbrv.py schema lookup
 ```
 
-All commands support `--json` flag for JSON output.
+### Agent-native output contract
+
+Stdout is a stable JSON envelope when not attached to a terminal (piped or
+captured by an agent runtime), and a human table/indent view when run on a TTY.
+Every response carries the same shape:
+
+- Success: `{"ok": true, "data": ..., "meta": {"schema_version", "cli_version", "cache", "latency_ms"}}`
+- Partial (batch): `{"ok": "partial", "data": {"succeeded": [...], "failed": [...]}}`
+- Error: `{"ok": false, "error": {"code", "message", "retryable", ...}}`
+
+Exit codes are distinct per failure class: `0` success, `1` runtime,
+`2` validation, `3` not found. Force a format with `--format json|table|human`
+(or the back-compat `--json`); flags may appear before or after the subcommand.
 
 ## Requirements
 
-- Python 3.6+ (no third-party packages required)
+- Python 3.9+ (no third-party packages required)
 
 ## Support
 
