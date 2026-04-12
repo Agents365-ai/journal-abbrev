@@ -22,25 +22,72 @@
 
 ## 安装
 
-### Claude Code
+`jabbrv` 是一个 **agent-native CLI** —— 输出稳定的 JSON 信封、提供 `schema`
+自描述子命令、使用不同退出码区分错误类别。这意味着所有 AI 智能体平台都使用完全
+相同的调用方式（`python3 jabbrv.py <cmd>`）。各平台之间唯一的区别是
+*智能体如何发现这个工具的存在*。根据你的平台选择下面对应的层级即可。
+
+### 层级 1 —— 原生支持 `SKILL.md` 的平台
+
+这些平台会自动加载 `SKILL.md`，无需额外配置文件。
+
+| 平台 | 安装命令 |
+|---|---|
+| **Claude Code**（全局） | `git clone https://github.com/Agents365-ai/journal-abbrev.git ~/.claude/skills/journal-abbrev` |
+| **Claude Code**（项目） | `git clone https://github.com/Agents365-ai/journal-abbrev.git .claude/skills/journal-abbrev` |
+| **OpenClaw**（全局） | `git clone https://github.com/Agents365-ai/journal-abbrev.git ~/.openclaw/skills/journal-abbrev` |
+| **OpenClaw**（项目） | `git clone https://github.com/Agents365-ai/journal-abbrev.git skills/journal-abbrev` |
+| **ClawHub** | `clawhub install journal-abbrev` |
+| **SkillsMP** | 在 [skillsmp.com](https://skillsmp.com) 搜索 `journal-abbrev` |
+
+### 层级 2 —— 支持 `AGENTS.md` 约定的平台
+
+这些平台遵循 [`agents.md`](https://agents.md) 规范，会自动发现仓库根目录下的
+`AGENTS.md`。克隆到任意位置，告诉智能体从该路径使用此工具即可——其余工作由
+`AGENTS.md` 文件完成。
+
+| 平台 | 说明 |
+|---|---|
+| **OpenAI Codex CLI** | `AGENTS.md` 是其原生约定 |
+| **Gemini CLI** | 在没有 `GEMINI.md` 时会回退到 `AGENTS.md` |
+| **Claude Code** | 在没有 `CLAUDE.md` 时会回退到 `AGENTS.md`（更推荐层级 1 的方式） |
+| **Cursor**（近期版本） | 在没有 `.cursor/rules` 时会识别 `AGENTS.md` |
+| **Aider** | 将 `AGENTS.md` 识别为项目约定 |
+| **其他支持该约定的智能体** | 自动生效 |
+
+项目级安装示例：
 
 ```bash
-# 全局安装
-git clone https://github.com/Agents365-ai/journal-abbrev.git ~/.claude/skills/journal-abbrev
-
-# 项目级安装
-git clone https://github.com/Agents365-ai/journal-abbrev.git .claude/skills/journal-abbrev
+git clone https://github.com/Agents365-ai/journal-abbrev.git vendor/journal-abbrev
+# 在下一次智能体会话中指向 vendor/journal-abbrev/AGENTS.md，
+# 或直接告诉智能体："使用 vendor/journal-abbrev 中的 journal-abbrev 工具"
 ```
 
-### OpenClaw
+### 层级 3 —— 使用自定义规则文件的平台
+
+对于使用自有规则文件约定的智能体，在规则文件中加入一行指向 `AGENTS.md` 的引用
+即可，避免重复编写内容。
+
+| 平台 | 编辑的文件 | 加入的片段 |
+|---|---|---|
+| **GitHub Copilot Chat** | `.github/copilot-instructions.md` | `See ./vendor/journal-abbrev/AGENTS.md for how to use the journal-abbrev tool.` |
+| **Continue.dev** | `.continue/config.yaml` 的 `systemMessage:` 字段 | `"For journal abbreviation tasks, follow vendor/journal-abbrev/AGENTS.md."` |
+| **Windsurf** | `.windsurfrules` | `When the user asks about journal abbreviations, use vendor/journal-abbrev/AGENTS.md.` |
+| **Cursor**（旧版） | `.cursor/rules/journal-abbrev.mdc` | 一行规则，指向 `vendor/journal-abbrev/AGENTS.md` |
+
+### 层级 4 —— 手动调用 / 任意 Shell
+
+没有智能体？没有规则文件？CLI 本身是自包含的，克隆到任意位置直接运行即可：
 
 ```bash
-git clone https://github.com/Agents365-ai/journal-abbrev.git ~/.openclaw/skills/journal-abbrev
+git clone https://github.com/Agents365-ai/journal-abbrev.git
+cd journal-abbrev
+python3 jabbrv.py lookup "Nature Medicine"
+python3 jabbrv.py schema              # 完整机器可读契约
 ```
 
-### SkillsMP
-
-在 [skillsmp.com](https://skillsmp.com) 搜索 `journal-abbrev` 并安装。
+纯 Python 3.9+ 标准库实现——无需 `pip install`、无需虚拟环境、无第三方依赖。
+在 macOS、Linux 和 Windows 上均可运行。
 
 ## 使用方法
 
