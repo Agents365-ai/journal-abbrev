@@ -5,7 +5,7 @@ allowed-tools: Bash, Read, Write, Edit, Glob, Grep
 # --- Claude Code fields above, OpenClaw/SkillsMP fields below ---
 author: Agents365-ai
 category: Academic Research
-version: 1.1.1
+version: 1.2.0
 created: 2026-03-29
 updated: 2026-05-18
 github: https://github.com/Agents365-ai/journal-abbrev
@@ -84,6 +84,17 @@ Envelope shape (always the same fields for every subcommand):
 Branch on `error.code` + `error.retryable` rather than exit code alone — exit
 `1` covers both `upstream_unavailable` and `runtime_error`. Full machine-readable
 listing: `python3 jabbrv.py schema` → `data.error_codes`.
+
+### Environment variables (set by host, not by agent argv)
+
+| Variable | Effect |
+|----------|--------|
+| `JABBRV_CACHE_DIR` | Override the cache directory (default: `<install>/cache`). Useful in sandboxes where the install tree is read-only. |
+| `JABBRV_OFFLINE` | Truthy (`1`/`true`/`yes`/`on`) skips AbbrevISO and NLM; only the local JabRef cache is consulted. Misses become definitive `not_found` (not retryable) since the host has declared upstream off-limits. `meta.offline: true` appears in every envelope so callers can see the policy. |
+
+Trust boundary: these are read from the process environment, not from
+arguments. The host or sandbox sets them; the agent cannot override them via
+argv. Schema introspection: `python3 jabbrv.py schema` → `data.global_env`.
 
 ## Workflow
 

@@ -17,6 +17,7 @@ import argparse
 import csv
 import io
 import json
+import os
 import re
 import sys
 import time
@@ -32,10 +33,28 @@ from urllib.request import Request, urlopen
 # Constants
 # ---------------------------------------------------------------------------
 
-CLI_VERSION = "1.1.1"
-SCHEMA_VERSION = "1.1.1"
+CLI_VERSION = "1.2.0"
+SCHEMA_VERSION = "1.2.0"
 
-CACHE_DIR = Path(__file__).parent / "cache"
+
+def _resolve_cache_dir() -> Path:
+    """Cache dir, overridable by JABBRV_CACHE_DIR so a sandbox or test
+    harness can pin it outside the install tree. Trust boundary: the env
+    var is set by the human/system, not by agent argv."""
+    env = os.environ.get("JABBRV_CACHE_DIR", "").strip()
+    if env:
+        return Path(env).expanduser()
+    return Path(__file__).parent / "cache"
+
+
+def _is_offline() -> bool:
+    """Truthy JABBRV_OFFLINE disables AbbrevISO and NLM lookups. The local
+    JabRef cache still works. Treated as a definitive miss (not transient)
+    because the user/system has decided not to consult these sources."""
+    return os.environ.get("JABBRV_OFFLINE", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+CACHE_DIR = _resolve_cache_dir()
 
 # JabRef CSV files on GitHub (CC0 licensed)
 JABREF_BASE = "https://raw.githubusercontent.com/JabRef/abbrv.jabref.org/main/journals"
@@ -287,7 +306,12 @@ def lookup_abbreviso(name: str) -> dict | None:
     the input back unchanged — meaning LTWA has no abbreviation for it).
     Raises UpstreamUnavailable on transient network failure so the caller
     can distinguish "API down" from "API said no".
+
+    When JABBRV_OFFLINE is set, returns None without contacting the network.
     """
+    if _is_offline():
+        return None
+
     global _last_abbreviso_time
     elapsed = time.time() - _last_abbreviso_time
     if elapsed < _ABBREVISO_GAP:
@@ -315,7 +339,12 @@ def lookup_nlm(query: str, direction: str = "abbreviate") -> dict | None:
     Returns the result dict on hit, None on definitive miss (NLM returned an
     empty idlist or a record without the expected title/abbrev elements).
     Raises UpstreamUnavailable on transient network/parse failure.
+
+    When JABBRV_OFFLINE is set, returns None without contacting the network.
     """
+    if _is_offline():
+        return None
+
     global _last_nlm_time
     elapsed = time.time() - _last_nlm_time
     if elapsed < _NLM_GAP:
@@ -626,6 +655,26 @@ SCHEMA: dict[str, Any] = {
             "description": "Alias for --format json (back-compat).",
         },
     ],
+    "global_env": [
+        {
+            "name": "JABBRV_CACHE_DIR",
+            "purpose": "Override where JabRef CSVs are stored.",
+            "default": "<install-dir>/cache",
+            "trust": "system",
+            "since": "1.2.0",
+        },
+        {
+            "name": "JABBRV_OFFLINE",
+            "purpose": "Truthy value (1/true/yes/on) disables AbbrevISO and NLM "
+                       "lookups; only the local JabRef cache is consulted. Misses "
+                       "in offline mode are definitive (not retryable) — the system "
+                       "has declared upstream sources off-limits. The envelope's "
+                       "meta.offline flag is set to true so the caller can see it.",
+            "default": "unset (online)",
+            "trust": "system",
+            "since": "1.2.0",
+        },
+    ],
     "exit_codes": {
         "0": "success (including partial success)",
         "1": "runtime / upstream error",
@@ -761,6 +810,8 @@ def _meta(**extra) -> dict:
         "schema_version": SCHEMA_VERSION,
         "cli_version": CLI_VERSION,
     }
+    if _is_offline():
+        m["offline"] = True
     if (
         _cache_stats["files_loaded"]
         or _cache_stats["files_failed"]
@@ -1242,6 +1293,9 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Output: stdout is JSON when not a TTY, table/indent when interactive.\n"
             "Exit codes: 0 success (incl. partial), 1 runtime, 2 validation, 3 not found.\n"
+            "Env (set by host, not agent argv):\n"
+            "  JABBRV_CACHE_DIR  override the cache directory (default: <install>/cache)\n"
+            "  JABBRV_OFFLINE    truthy disables AbbrevISO/NLM; only local cache is used\n"
             f"CLI {CLI_VERSION}. Run 'jabbrv schema' for the full machine-readable contract.\n"
             "--format/--json may appear before or after the subcommand."
         ),
