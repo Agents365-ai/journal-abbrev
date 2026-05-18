@@ -32,8 +32,8 @@ from urllib.request import Request, urlopen
 # Constants
 # ---------------------------------------------------------------------------
 
-CLI_VERSION = "1.1.0"
-SCHEMA_VERSION = "1.1.0"
+CLI_VERSION = "1.1.1"
+SCHEMA_VERSION = "1.1.1"
 
 CACHE_DIR = Path(__file__).parent / "cache"
 
@@ -106,6 +106,24 @@ def _try_source(fn, *args, transient: list[dict], **kwargs):
     except UpstreamUnavailable as e:
         transient.extend(e.sources)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Boundary validation
+# ---------------------------------------------------------------------------
+
+def _validate_input_file(path: str) -> dict | None:
+    """Boundary check for commands that read a user-supplied file. Returns an
+    error envelope if the path is missing or not a regular file, else None.
+    Internal processing functions assume the path is valid after this passes."""
+    p = Path(path)
+    if not p.exists():
+        return envelope_error("file_not_found", f"file not found: {path}",
+                              retryable=False, path=path)
+    if not p.is_file():
+        return envelope_error("validation_error", f"not a regular file: {path}",
+                              retryable=False, path=path)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -441,11 +459,11 @@ def process_bib(
     output: str | None = None,
     dry_run: bool = False,
 ) -> dict:
-    """Process a .bib file, returning a structured result (may not write)."""
-    path = Path(filepath)
-    if not path.exists():
-        raise FileNotFoundError(f"file not found: {filepath}")
+    """Process a .bib file, returning a structured result (may not write).
 
+    Assumes the path was validated at the CLI boundary (handle_bib).
+    """
+    path = Path(filepath)
     text = path.read_text(encoding="utf-8", errors="replace")
     pattern = re.compile(r"(journal\s*=\s*\{)([^}]+)(\})", re.IGNORECASE)
     changes: list[dict] = []
@@ -495,11 +513,9 @@ def process_bib(
 
 
 def batch_lookup(filepath: str) -> dict:
-    """Process a text file with one journal name per line. Returns partial-success shape."""
+    """Process a text file with one journal name per line. Returns
+    partial-success shape. Assumes path validated at the CLI boundary."""
     path = Path(filepath)
-    if not path.exists():
-        raise FileNotFoundError(f"file not found: {filepath}")
-
     lines = path.read_text(encoding="utf-8").strip().splitlines()
     succeeded: list[dict] = []
     failed: list[dict] = []
@@ -535,11 +551,9 @@ def batch_lookup(filepath: str) -> dict:
 
 
 def batch_stream(filepath: str):
-    """Yield one NDJSON event per line, plus a final summary event."""
+    """Yield one NDJSON event per line, plus a final summary event.
+    Assumes path validated at the CLI boundary."""
     path = Path(filepath)
-    if not path.exists():
-        raise FileNotFoundError(f"file not found: {filepath}")
-
     lines = path.read_text(encoding="utf-8").strip().splitlines()
     total = 0
     ok_n = 0
@@ -641,6 +655,7 @@ SCHEMA: dict[str, Any] = {
         "lookup": {
             "summary": "Auto-detect direction and look up a journal",
             "since": "1.0.0",
+            "mutates": "read",
             "params": [
                 {"name": "query", "positional": True, "nargs": "+", "type": "string",
                  "required": True, "description": "Journal name or abbreviation (may contain spaces)"},
@@ -649,6 +664,7 @@ SCHEMA: dict[str, Any] = {
         "abbrev": {
             "summary": "Abbreviate a full journal name",
             "since": "1.0.0",
+            "mutates": "read",
             "params": [
                 {"name": "query", "positional": True, "nargs": "+", "type": "string",
                  "required": True, "description": "Full journal name"},
@@ -657,6 +673,7 @@ SCHEMA: dict[str, Any] = {
         "expand": {
             "summary": "Expand a journal abbreviation",
             "since": "1.0.0",
+            "mutates": "read",
             "params": [
                 {"name": "query", "positional": True, "nargs": "+", "type": "string",
                  "required": True, "description": "Journal abbreviation"},
@@ -665,6 +682,7 @@ SCHEMA: dict[str, Any] = {
         "search": {
             "summary": "Fuzzy-search the local cache",
             "since": "1.0.0",
+            "mutates": "read",
             "params": [
                 {"name": "query", "positional": True, "nargs": "+", "type": "string",
                  "required": True, "description": "Search terms (all terms must appear)"},
@@ -677,6 +695,7 @@ SCHEMA: dict[str, Any] = {
         "bib": {
             "summary": "Rewrite journal names in a BibTeX file",
             "since": "1.0.0",
+            "mutates": "write",
             "params": [
                 {"name": "path", "positional": True, "type": "string", "required": True,
                  "description": "Path to .bib file"},
@@ -691,6 +710,7 @@ SCHEMA: dict[str, Any] = {
         "batch": {
             "summary": "Look up a text file of journal names (one per line)",
             "since": "1.0.0",
+            "mutates": "read",
             "params": [
                 {"name": "path", "positional": True, "type": "string", "required": True,
                  "description": "Path to text file, one journal name per line"},
@@ -701,15 +721,27 @@ SCHEMA: dict[str, Any] = {
         "cache": {
             "summary": "Inspect or refresh the local cache",
             "since": "1.0.0",
+            "mutates": "destructive",
+            "mutates_by_action": {
+                "status": "read",
+                "update": "write",
+                "rebuild": "destructive",
+            },
             "params": [
                 {"name": "action", "positional": True, "type": "string", "required": True,
                  "choices": ["status", "update", "rebuild"],
-                 "description": "status: inspect cache; update: download missing files; rebuild: delete + redownload"},
+                 "description": "status: inspect cache (read); update: download missing files (write); "
+                                "rebuild: DELETE all cached CSVs and redownload (destructive)"},
+                {"name": "--dry-run", "type": "bool", "default": False,
+                 "description": "For update: list files that would be downloaded. "
+                                "For rebuild: list files that would be deleted and redownloaded. "
+                                "No-op for status. Nothing is written either way."},
             ],
         },
         "schema": {
             "summary": "Print the command schema (JSON)",
             "since": "1.0.0",
+            "mutates": "read",
             "params": [
                 {"name": "target", "positional": True, "type": "string",
                  "required": False, "default": None,
@@ -1005,6 +1037,9 @@ def handle_search(args) -> dict:
 
 
 def handle_bib(args) -> dict:
+    err = _validate_input_file(args.path)
+    if err:
+        return err
     direction = "expand" if args.expand else "abbreviate"
     try:
         result = process_bib(
@@ -1013,8 +1048,6 @@ def handle_bib(args) -> dict:
             output=args.output,
             dry_run=args.dry_run,
         )
-    except FileNotFoundError as e:
-        return envelope_error("file_not_found", str(e), retryable=False, path=args.path)
     except Exception as e:
         return envelope_error("runtime_error", f"process_bib failed: {e}", retryable=False)
     return envelope_ok(result)
@@ -1022,16 +1055,17 @@ def handle_bib(args) -> dict:
 
 def handle_batch(args) -> dict:
     # `--stream` is handled separately in main() before this dispatch
-    try:
-        result = batch_lookup(args.path)
-    except FileNotFoundError as e:
-        return envelope_error("file_not_found", str(e), retryable=False, path=args.path)
+    err = _validate_input_file(args.path)
+    if err:
+        return err
+    result = batch_lookup(args.path)
     return envelope_partial(result["succeeded"], result["failed"])
 
 
 def handle_cache(args) -> dict:
     global _cache
     action = args.action
+    dry_run = getattr(args, "dry_run", False)
 
     if action == "status":
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -1061,6 +1095,14 @@ def handle_cache(args) -> dict:
         })
 
     if action == "update":
+        missing = [f for f in JABREF_FILES if not (CACHE_DIR / f).exists()]
+        if dry_run:
+            return envelope_ok({
+                "action": "update",
+                "dry_run": True,
+                "would_download": missing,
+                "would_download_count": len(missing),
+            })
         _cache = None
         ensure_cache()
         fta, ata = load_cache()
@@ -1074,10 +1116,21 @@ def handle_cache(args) -> dict:
         })
 
     if action == "rebuild":
-        if CACHE_DIR.exists():
-            for f in CACHE_DIR.iterdir():
-                if f.suffix == ".csv":
-                    f.unlink()
+        existing_csvs = (
+            sorted(f.name for f in CACHE_DIR.iterdir() if f.suffix == ".csv")
+            if CACHE_DIR.exists() else []
+        )
+        if dry_run:
+            return envelope_ok({
+                "action": "rebuild",
+                "dry_run": True,
+                "would_delete": existing_csvs,
+                "would_delete_count": len(existing_csvs),
+                "would_download": JABREF_FILES,
+                "would_download_count": len(JABREF_FILES),
+            })
+        for fname in existing_csvs:
+            (CACHE_DIR / fname).unlink()
         _cache = None
         ensure_cache()
         fta, ata = load_cache()
@@ -1246,14 +1299,13 @@ def main() -> int:
 
     # Streaming path for `batch --stream` — bypass envelope aggregation
     if args.command == "batch" and getattr(args, "stream", False):
-        try:
-            for event in batch_stream(args.path):
-                sys.stdout.write(json.dumps(event, ensure_ascii=False) + "\n")
-                sys.stdout.flush()
-        except FileNotFoundError as e:
-            env = envelope_error("file_not_found", str(e), retryable=False, path=args.path)
-            emit(env, fmt, "batch")
-            return EXIT_VALIDATION
+        err = _validate_input_file(args.path)
+        if err:
+            emit(err, fmt, "batch")
+            return exit_code_for(err)
+        for event in batch_stream(args.path):
+            sys.stdout.write(json.dumps(event, ensure_ascii=False) + "\n")
+            sys.stdout.flush()
         return EXIT_OK
 
     handler = HANDLERS.get(args.command)

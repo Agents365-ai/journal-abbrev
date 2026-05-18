@@ -5,7 +5,7 @@ allowed-tools: Bash, Read, Write, Edit, Glob, Grep
 # --- Claude Code fields above, OpenClaw/SkillsMP fields below ---
 author: Agents365-ai
 category: Academic Research
-version: 1.1.0
+version: 1.1.1
 created: 2026-03-29
 updated: 2026-05-18
 github: https://github.com/Agents365-ai/journal-abbrev
@@ -42,7 +42,9 @@ Look up journal/magazine name abbreviations using a multi-source cascade: JabRef
 | Batch as NDJSON stream | `python3 jabbrv.py batch journals.txt --stream` |
 | Inspect cache state | `python3 jabbrv.py cache status` |
 | Download missing cache files | `python3 jabbrv.py cache update` |
-| Rebuild cache from scratch | `python3 jabbrv.py cache rebuild` |
+| Preview what update would fetch | `python3 jabbrv.py cache update --dry-run` |
+| Rebuild cache from scratch (destructive) | `python3 jabbrv.py cache rebuild` |
+| Preview rebuild (no delete) | `python3 jabbrv.py cache rebuild --dry-run` |
 | Machine-readable CLI contract | `python3 jabbrv.py schema` |
 | Schema for one subcommand | `python3 jabbrv.py schema lookup` |
 
