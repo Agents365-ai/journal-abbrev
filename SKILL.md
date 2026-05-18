@@ -5,9 +5,9 @@ allowed-tools: Bash, Read, Write, Edit, Glob, Grep
 # --- Claude Code fields above, OpenClaw/SkillsMP fields below ---
 author: Agents365-ai
 category: Academic Research
-version: 1.0.2
+version: 1.1.0
 created: 2026-03-29
-updated: 2026-04-12
+updated: 2026-05-18
 github: https://github.com/Agents365-ai/journal-abbrev
 homepage: https://github.com/Agents365-ai/journal-abbrev
 metadata:
@@ -71,34 +71,19 @@ Envelope shape (always the same fields for every subcommand):
 
 ### Error codes (inside `error.code`)
 
-`not_found`, `file_not_found`, `validation_error`, `runtime_error`. Each carries
-a `retryable: bool` so agents can branch retry logic.
+| Code | Retryable | Exit | Meaning |
+|------|-----------|------|---------|
+| `not_found` | no | 3 | Lookup completed but no source matched |
+| `upstream_unavailable` | **yes** | 1 | One or more upstream APIs failed transiently; the lookup could not be concluded. Carries `error.sources[]` listing each failure. Retry later. |
+| `file_not_found` | no | 2 | Input file path does not exist |
+| `validation_error` | no | 2 | Bad argument or flag combination |
+| `runtime_error` | yes | 1 | Unexpected internal error |
+
+Branch on `error.code` + `error.retryable` rather than exit code alone — exit
+`1` covers both `upstream_unavailable` and `runtime_error`. Full machine-readable
+listing: `python3 jabbrv.py schema` → `data.error_codes`.
 
 ## Workflow
-
-### Step 0. Update check (notify, don't pull) — first use per conversation
-
-Throttle to one check per 24 hours per installation; never mutate the skill directory without explicit user consent.
-
-1. If `<this-skill-dir>/.last_update` exists and is less than 24 hours old, skip this step entirely.
-
-2. Otherwise, fetch the latest tag from upstream:
-
-   ```bash
-   git -C <this-skill-dir> ls-remote --tags origin 'v*' 2>/dev/null \
-     | awk '{print $2}' | sed 's|refs/tags/||' \
-     | sort -V | tail -1
-   ```
-
-3. Compare with this skill's `metadata.version` from the frontmatter. If the upstream tag is strictly newer (semver), tell the user one line and ask:
-
-   > "A newer version of this skill is available: vX.Y.Z → vA.B.C. Want me to `git pull`?"
-
-   If they say yes, run `git -C <this-skill-dir> pull --ff-only`. Refresh `.last_update` either way so the prompt doesn't repeat for 24 hours.
-
-4. If upstream is the same or older, refresh `.last_update` silently and continue.
-
-5. On any failure (offline, not a git checkout — e.g. ClawHub-installed copy, read-only path, no permission), swallow the error silently and continue with the user's task. Do not mention the failure.
 
 ### Step 1: Detect Intent
 
@@ -194,6 +179,6 @@ python3 jabbrv.py batch journals.txt
 | Issue | Solution |
 |-------|---------|
 | "No result found" | Try `search` with partial name for fuzzy matching |
-| Cache download fails | Check network connection, retry with `update-cache` |
+| Cache download fails | Check network connection, retry with `cache update` (or `cache rebuild` to force) |
 | Wrong abbreviation style | JabRef = ISO 4 (with dots), NLM = MEDLINE (no dots) |
 | BibTeX field not detected | Ensure format is `journal = {Name}` (curly braces) |

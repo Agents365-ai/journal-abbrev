@@ -32,8 +32,8 @@ from urllib.request import Request, urlopen
 # Constants
 # ---------------------------------------------------------------------------
 
-CLI_VERSION = "1.0.2"
-SCHEMA_VERSION = "1.0.0"
+CLI_VERSION = "1.1.0"
+SCHEMA_VERSION = "1.1.0"
 
 CACHE_DIR = Path(__file__).parent / "cache"
 
@@ -81,6 +81,31 @@ _last_abbreviso_time = 0.0
 _last_nlm_time = 0.0
 _ABBREVISO_GAP = 1.0
 _NLM_GAP = 0.35  # ~3 req/sec
+
+
+class UpstreamUnavailable(Exception):
+    """Raised when one or more upstream APIs failed transiently (timeout,
+    connection error, 5xx). Distinct from a definitive "no such journal" miss
+    so the calling agent knows the lookup is worth retrying.
+
+    `sources` is a list of {"source": str, "error": str} entries describing
+    each failed upstream. Single-source lookups raise with one entry; the
+    cascade collects multiple before re-raising.
+    """
+
+    def __init__(self, sources: list[dict]):
+        self.sources = sources
+        super().__init__("; ".join(f"{s['source']}: {s['error']}" for s in sources))
+
+
+def _try_source(fn, *args, transient: list[dict], **kwargs):
+    """Call a single-source lookup; on UpstreamUnavailable, append to
+    `transient` and return None so the cascade can keep trying other sources."""
+    try:
+        return fn(*args, **kwargs)
+    except UpstreamUnavailable as e:
+        transient.extend(e.sources)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +263,13 @@ def fuzzy_search(query: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def lookup_abbreviso(name: str) -> dict | None:
-    """Look up abbreviation via AbbrevISO (forward only)."""
+    """Look up abbreviation via AbbrevISO (forward only).
+
+    Returns the result dict on hit, None on definitive miss (the API echoed
+    the input back unchanged — meaning LTWA has no abbreviation for it).
+    Raises UpstreamUnavailable on transient network failure so the caller
+    can distinguish "API down" from "API said no".
+    """
     global _last_abbreviso_time
     elapsed = time.time() - _last_abbreviso_time
     if elapsed < _ABBREVISO_GAP:
@@ -249,18 +280,24 @@ def lookup_abbreviso(name: str) -> dict | None:
     try:
         _last_abbreviso_time = time.time()
         result = _fetch(url).strip()
-        if result and result != name:
-            return {
-                "query": name, "full": name, "abbreviation": result,
-                "direction": "abbreviate", "source": "AbbrevISO", "standard": "ISO 4",
-            }
     except (HTTPError, URLError, TimeoutError) as e:
-        print(f"  AbbrevISO error: {e}", file=sys.stderr)
+        raise UpstreamUnavailable([{"source": "AbbrevISO", "error": str(e)}]) from e
+
+    if result and result != name:
+        return {
+            "query": name, "full": name, "abbreviation": result,
+            "direction": "abbreviate", "source": "AbbrevISO", "standard": "ISO 4",
+        }
     return None
 
 
 def lookup_nlm(query: str, direction: str = "abbreviate") -> dict | None:
-    """Look up via NLM Catalog. direction: 'abbreviate' or 'expand'."""
+    """Look up via NLM Catalog. direction: 'abbreviate' or 'expand'.
+
+    Returns the result dict on hit, None on definitive miss (NLM returned an
+    empty idlist or a record without the expected title/abbrev elements).
+    Raises UpstreamUnavailable on transient network/parse failure.
+    """
     global _last_nlm_time
     elapsed = time.time() - _last_nlm_time
     if elapsed < _NLM_GAP:
@@ -289,19 +326,19 @@ def lookup_nlm(query: str, direction: str = "abbreviate") -> dict | None:
         fetch_url = f"{base}/efetch.fcgi?db=nlmcatalog&id={ids[0]}&retmode=xml"
         xml_text = _fetch(fetch_url)
         root = ET.fromstring(xml_text)
-
-        title_el = root.find(".//TitleMain/Title")
-        abbrev_el = root.find(".//MedlineTA")
-
-        if title_el is not None and abbrev_el is not None:
-            full = title_el.text.strip().rstrip(".")
-            abbrev = abbrev_el.text.strip()
-            return {
-                "query": query, "full": full, "abbreviation": abbrev,
-                "direction": direction, "source": "NLM Catalog", "standard": "MEDLINE",
-            }
     except (HTTPError, URLError, TimeoutError, ET.ParseError) as e:
-        print(f"  NLM error: {e}", file=sys.stderr)
+        raise UpstreamUnavailable([{"source": "NLM Catalog", "error": str(e)}]) from e
+
+    title_el = root.find(".//TitleMain/Title")
+    abbrev_el = root.find(".//MedlineTA")
+
+    if title_el is not None and abbrev_el is not None:
+        full = title_el.text.strip().rstrip(".")
+        abbrev = abbrev_el.text.strip()
+        return {
+            "query": query, "full": full, "abbreviation": abbrev,
+            "direction": direction, "source": "NLM Catalog", "standard": "MEDLINE",
+        }
     return None
 
 
@@ -310,53 +347,88 @@ def lookup_nlm(query: str, direction: str = "abbreviate") -> dict | None:
 # ---------------------------------------------------------------------------
 
 def abbreviate(name: str) -> dict | None:
-    """Full name -> abbreviation. Cascade: local -> AbbrevISO -> NLM."""
+    """Full name -> abbreviation. Cascade: local -> AbbrevISO -> NLM.
+
+    Returns None only when every consulted source gave a definitive miss.
+    Raises UpstreamUnavailable when at least one source failed transiently
+    and no source produced a hit — so the caller cannot conclude "doesn't
+    exist" purely from network failure.
+    """
     result = lookup_local(name)
     if result and result["direction"] == "abbreviate":
         return result
 
-    result = lookup_abbreviso(name)
+    transient: list[dict] = []
+
+    result = _try_source(lookup_abbreviso, name, transient=transient)
     if result:
         return result
 
-    result = lookup_nlm(name, direction="abbreviate")
+    result = _try_source(lookup_nlm, name, transient=transient, direction="abbreviate")
     if result:
         return result
 
+    if transient:
+        raise UpstreamUnavailable(transient)
     return None
 
 
 def expand(abbrev_: str) -> dict | None:
-    """Abbreviation -> full name. Cascade: local -> NLM."""
+    """Abbreviation -> full name. Cascade: local -> NLM.
+
+    Same transient-vs-miss contract as `abbreviate`.
+    """
     result = lookup_local(abbrev_)
     if result:
         return result
 
-    result = lookup_nlm(abbrev_, direction="expand")
+    transient: list[dict] = []
+
+    result = _try_source(lookup_nlm, abbrev_, transient=transient, direction="expand")
     if result:
         return result
 
+    if transient:
+        raise UpstreamUnavailable(transient)
     return None
 
 
 def auto_lookup(query: str) -> dict | None:
-    """Auto-detect direction and look up."""
+    """Auto-detect direction and look up.
+
+    Tries both directions in heuristic order. Re-raises a combined
+    UpstreamUnavailable only if all attempts ended in transient failure with
+    no hits anywhere.
+    """
     words = query.split()
     has_periods = "." in query
     avg_word_len = sum(len(w.rstrip(".")) for w in words) / max(len(words), 1)
 
     if has_periods or (len(words) > 1 and avg_word_len < 4):
-        # Likely abbreviation -> try expand first
-        result = expand(query)
-        if result:
-            return result
-        return abbreviate(query)
+        order = [expand, abbreviate]
     else:
-        # Likely full name -> try abbreviate first
-        result = abbreviate(query)
+        order = [abbreviate, expand]
+
+    transient: list[dict] = []
+    for fn in order:
+        try:
+            result = fn(query)
+        except UpstreamUnavailable as e:
+            transient.extend(e.sources)
+            continue
         if result:
             return result
-        return expand(query)
+
+    if transient:
+        # Dedupe by source name — NLM may appear in both expand and abbreviate
+        seen: set[str] = set()
+        deduped: list[dict] = []
+        for s in transient:
+            if s["source"] not in seen:
+                seen.add(s["source"])
+                deduped.append(s)
+        raise UpstreamUnavailable(deduped)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -377,13 +449,18 @@ def process_bib(
     text = path.read_text(encoding="utf-8", errors="replace")
     pattern = re.compile(r"(journal\s*=\s*\{)([^}]+)(\})", re.IGNORECASE)
     changes: list[dict] = []
+    transient_failures: list[dict] = []
 
     def replacer(m):
         prefix, name, suffix = m.group(1), m.group(2).strip(), m.group(3)
-        if direction == "abbreviate":
-            result = abbreviate(name)
-        else:
-            result = expand(name)
+        try:
+            if direction == "abbreviate":
+                result = abbreviate(name)
+            else:
+                result = expand(name)
+        except UpstreamUnavailable as e:
+            transient_failures.append({"name": name, "sources": e.sources})
+            return m.group(0)
 
         if result:
             new_name = result["abbreviation"] if direction == "abbreviate" else result["full"]
@@ -413,6 +490,7 @@ def process_bib(
         "direction": direction,
         "changes_count": len(changes),
         "changes": changes,
+        "transient_failures": transient_failures,
     }
 
 
@@ -429,7 +507,19 @@ def batch_lookup(filepath: str) -> dict:
         name = line.strip()
         if not name or name.startswith("#"):
             continue
-        result = auto_lookup(name)
+        try:
+            result = auto_lookup(name)
+        except UpstreamUnavailable as e:
+            failed.append({
+                "query": name,
+                "error": {
+                    "code": "upstream_unavailable",
+                    "message": f"upstream sources failed transiently for '{name}'",
+                    "retryable": True,
+                    "sources": e.sources,
+                },
+            })
+            continue
         if result:
             succeeded.append(result)
         else:
@@ -454,12 +544,28 @@ def batch_stream(filepath: str):
     total = 0
     ok_n = 0
     fail_n = 0
+    transient_n = 0
     for line in lines:
         name = line.strip()
         if not name or name.startswith("#"):
             continue
         total += 1
-        result = auto_lookup(name)
+        try:
+            result = auto_lookup(name)
+        except UpstreamUnavailable as e:
+            fail_n += 1
+            transient_n += 1
+            yield {
+                "ok": False,
+                "query": name,
+                "error": {
+                    "code": "upstream_unavailable",
+                    "message": f"upstream sources failed transiently for '{name}'",
+                    "retryable": True,
+                    "sources": e.sources,
+                },
+            }
+            continue
         if result:
             ok_n += 1
             yield {"ok": True, "data": result}
@@ -476,7 +582,12 @@ def batch_stream(filepath: str):
             }
     yield {
         "ok": True,
-        "summary": {"total": total, "succeeded": ok_n, "failed": fail_n},
+        "summary": {
+            "total": total,
+            "succeeded": ok_n,
+            "failed": fail_n,
+            "transient_failures": transient_n,
+        },
     }
 
 
@@ -506,6 +617,20 @@ SCHEMA: dict[str, Any] = {
         "1": "runtime / upstream error",
         "2": "validation / bad input",
         "3": "not found",
+    },
+    "error_codes": {
+        "not_found": {"retryable": False, "exit_code": 3,
+                      "description": "Lookup completed but no source matched"},
+        "upstream_unavailable": {"retryable": True, "exit_code": 1,
+                                 "description": "One or more upstream APIs failed transiently; "
+                                                "the lookup cannot be concluded — retry later. "
+                                                "Carries error.sources[] listing each failure."},
+        "file_not_found": {"retryable": False, "exit_code": 2,
+                           "description": "Input file path does not exist"},
+        "validation_error": {"retryable": False, "exit_code": 2,
+                             "description": "Bad argument or flag combination"},
+        "runtime_error": {"retryable": True, "exit_code": 1,
+                          "description": "Unexpected internal error"},
     },
     "envelope": {
         "success": '{"ok": true, "data": ..., "meta": {...}}',
@@ -628,10 +753,17 @@ def envelope_ok(data: Any, **extra) -> dict:
     return env
 
 
-def envelope_error(code: str, message: str, retryable: bool = False, **fields) -> dict:
+def envelope_error(
+    code: str,
+    message: str,
+    retryable: bool = False,
+    *,
+    meta: dict | None = None,
+    **fields,
+) -> dict:
     err = {"code": code, "message": message, "retryable": retryable}
     err.update(fields)
-    return {"ok": False, "error": err, "meta": _meta()}
+    return {"ok": False, "error": err, "meta": _meta(**(meta or {}))}
 
 
 def envelope_partial(succeeded: list, failed: list, **extra) -> dict:
@@ -653,6 +785,8 @@ def exit_code_for(env: dict) -> int:
         return EXIT_NOT_FOUND
     if code in ("validation_error", "file_not_found", "invalid_argument", "file_exists"):
         return EXIT_VALIDATION
+    # upstream_unavailable, runtime_error, and anything unrecognized fall here.
+    # Agents should branch on error.code + error.retryable, not exit alone.
     return EXIT_RUNTIME
 
 
@@ -758,6 +892,16 @@ def emit(env: dict, fmt: str, command: str) -> None:
         print(f"Changes: {data['changes_count']}")
         for c in data.get("changes", []):
             print(f"  {c['old']}  ->  {c['new']}  ({c['source']})")
+        transient = data.get("transient_failures") or []
+        if transient:
+            print(
+                f"\n{len(transient)} entry(ies) left unchanged due to transient "
+                f"upstream failures (retry to retry):",
+                file=sys.stderr,
+            )
+            for t in transient:
+                srcs = ", ".join(s["source"] for s in t["sources"])
+                print(f"  - {t['name']}  ({srcs})", file=sys.stderr)
         return
 
     if command == "batch":
@@ -787,49 +931,48 @@ def emit(env: dict, fmt: str, command: str) -> None:
 # Command handlers
 # ---------------------------------------------------------------------------
 
-def handle_lookup(args) -> dict:
-    query = " ".join(args.query)
+def _lookup_handler(query: str, fn, miss_message: str) -> dict:
+    """Shared body for handle_lookup/abbrev/expand. `fn` is one of
+    auto_lookup/abbreviate/expand. Distinguishes transient upstream failures
+    from definitive misses so the agent gets the right retry signal."""
     t0 = time.time()
-    result = auto_lookup(query)
+    try:
+        result = fn(query)
+    except UpstreamUnavailable as e:
+        latency = int((time.time() - t0) * 1000)
+        return envelope_error(
+            "upstream_unavailable",
+            f"All consulted upstream sources failed for '{query}'; retry later",
+            retryable=True,
+            query=query,
+            sources=e.sources,
+            meta={"latency_ms": latency},
+        )
     latency = int((time.time() - t0) * 1000)
     if result is None:
         return envelope_error(
             "not_found",
-            f"No journal found for '{query}'",
+            miss_message,
             retryable=False,
             query=query,
+            meta={"latency_ms": latency},
         )
     return envelope_ok(result, meta={"latency_ms": latency})
+
+
+def handle_lookup(args) -> dict:
+    query = " ".join(args.query)
+    return _lookup_handler(query, auto_lookup, f"No journal found for '{query}'")
 
 
 def handle_abbrev(args) -> dict:
     query = " ".join(args.query)
-    t0 = time.time()
-    result = abbreviate(query)
-    latency = int((time.time() - t0) * 1000)
-    if result is None:
-        return envelope_error(
-            "not_found",
-            f"No abbreviation found for '{query}'",
-            retryable=False,
-            query=query,
-        )
-    return envelope_ok(result, meta={"latency_ms": latency})
+    return _lookup_handler(query, abbreviate, f"No abbreviation found for '{query}'")
 
 
 def handle_expand(args) -> dict:
     query = " ".join(args.query)
-    t0 = time.time()
-    result = expand(query)
-    latency = int((time.time() - t0) * 1000)
-    if result is None:
-        return envelope_error(
-            "not_found",
-            f"No expansion found for '{query}'",
-            retryable=False,
-            query=query,
-        )
-    return envelope_ok(result, meta={"latency_ms": latency})
+    return _lookup_handler(query, expand, f"No expansion found for '{query}'")
 
 
 def handle_search(args) -> dict:
