@@ -80,9 +80,11 @@ python3 jabbrv.py batch journals.txt
 python3 jabbrv.py batch journals.txt --stream   # NDJSON, one result per line
 
 # Cache management
-python3 jabbrv.py cache status     # inspect local cache
-python3 jabbrv.py cache update     # download missing files
-python3 jabbrv.py cache rebuild    # delete + redownload everything
+python3 jabbrv.py cache status                # inspect local cache
+python3 jabbrv.py cache update                # download missing files
+python3 jabbrv.py cache update --dry-run      # preview what would be downloaded
+python3 jabbrv.py cache rebuild               # delete + redownload everything (destructive)
+python3 jabbrv.py cache rebuild --dry-run     # preview what would be deleted, no writes
 
 # Machine-readable CLI contract (for AI agents and automation)
 python3 jabbrv.py schema
@@ -99,9 +101,34 @@ Every response carries the same shape:
 - Partial (batch): `{"ok": "partial", "data": {"succeeded": [...], "failed": [...]}}`
 - Error: `{"ok": false, "error": {"code", "message", "retryable", ...}}`
 
-Exit codes are distinct per failure class: `0` success, `1` runtime,
-`2` validation, `3` not found. Force a format with `--format json|table|human`
-(or the back-compat `--json`); flags may appear before or after the subcommand.
+The `error.code` field is stable. Notable codes:
+
+| Code | Retryable | Exit | Meaning |
+|------|-----------|------|---------|
+| `not_found` | no | 3 | Lookup completed but no source matched |
+| `upstream_unavailable` | **yes** | 1 | One or more upstream APIs (AbbrevISO, NLM) failed transiently. Carries `error.sources[]` listing each failure — retry later |
+| `file_not_found` / `validation_error` | no | 2 | Bad input |
+| `runtime_error` | yes | 1 | Unexpected internal failure |
+
+Branch on `error.code` + `error.retryable` rather than exit code alone — exit
+`1` covers both transient and runtime errors. Force a format with
+`--format json|table|human` (or the back-compat `--json`); flags may appear
+before or after the subcommand. Full machine-readable listing:
+`python3 jabbrv.py schema` → `data.error_codes`.
+
+### Environment variables
+
+Set by the host/sandbox, not by agent argv — the trust-boundary half of
+agent-native design:
+
+| Variable | Effect |
+|----------|--------|
+| `JABBRV_CACHE_DIR` | Override the cache directory (default: `<install>/cache`). Useful when the install tree is read-only or per-tenant isolation is required. |
+| `JABBRV_OFFLINE` | Truthy (`1`/`true`/`yes`/`on`) disables AbbrevISO and NLM; only the local JabRef cache is consulted. Misses become definitive `not_found` (not `upstream_unavailable`) since the host has declared upstream off-limits. Every envelope gets `meta.offline: true` so the caller can see the policy. |
+
+Schema introspection: `python3 jabbrv.py schema` → `data.global_env`. Each
+command's safety tier (`read` / `write` / `destructive`) is exposed as
+`data.commands.<name>.mutates`.
 
 ## Requirements
 

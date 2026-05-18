@@ -79,9 +79,11 @@ python3 jabbrv.py batch journals.txt
 python3 jabbrv.py batch journals.txt --stream   # NDJSON 流式输出
 
 # 缓存管理
-python3 jabbrv.py cache status     # 查看本地缓存状态
-python3 jabbrv.py cache update     # 下载缺失的缓存文件
-python3 jabbrv.py cache rebuild    # 删除并重新下载全部缓存
+python3 jabbrv.py cache status                # 查看本地缓存状态
+python3 jabbrv.py cache update                # 下载缺失的缓存文件
+python3 jabbrv.py cache update --dry-run      # 预览将下载哪些文件
+python3 jabbrv.py cache rebuild               # 删除并重新下载全部缓存（破坏性）
+python3 jabbrv.py cache rebuild --dry-run     # 预览将删除哪些文件，不实际写入
 
 # 机器可读的命令契约（供 AI 智能体或自动化工具使用）
 python3 jabbrv.py schema
@@ -97,9 +99,32 @@ python3 jabbrv.py schema lookup
 - 部分成功（batch）: `{"ok": "partial", "data": {"succeeded": [...], "failed": [...]}}`
 - 错误: `{"ok": false, "error": {"code", "message", "retryable", ...}}`
 
-退出码按失败类别区分：`0` 成功、`1` 运行时错误、`2` 参数/输入错误、`3` 未找到。
-可用 `--format json|table|human` 强制格式（`--json` 是旧版兼容别名）；
-所有全局参数可以放在子命令前或后。
+`error.code` 字段稳定。主要的错误码：
+
+| 错误码 | 可重试 | 退出码 | 含义 |
+|--------|--------|--------|------|
+| `not_found` | 否 | 3 | 查询完成，但所有数据源都未命中 |
+| `upstream_unavailable` | **是** | 1 | 至少一个上游 API（AbbrevISO、NLM）瞬时失败。`error.sources[]` 列出每个失败源 —— 稍后重试 |
+| `file_not_found` / `validation_error` | 否 | 2 | 输入不合法 |
+| `runtime_error` | 是 | 1 | 未预期的内部错误 |
+
+请基于 `error.code` + `error.retryable` 来分支重试逻辑，不要只看退出码 —— 退出
+`1` 同时覆盖瞬时错误和运行时错误。可用 `--format json|table|human` 强制格式
+（`--json` 是旧版兼容别名）；所有全局参数可以放在子命令前或后。完整的机器可读
+错误码列表：`python3 jabbrv.py schema` → `data.error_codes`。
+
+### 环境变量
+
+由宿主/沙盒设置，而非由智能体通过 argv 传递 —— agent-native 设计中的信任边界：
+
+| 变量 | 作用 |
+|------|------|
+| `JABBRV_CACHE_DIR` | 覆盖缓存目录（默认：`<安装目录>/cache`）。在安装目录只读、或需要按租户隔离时很有用。 |
+| `JABBRV_OFFLINE` | 真值（`1`/`true`/`yes`/`on`）禁用 AbbrevISO 和 NLM，仅查询本地 JabRef 缓存。离线模式下查不到的结果直接返回 `not_found`（而非 `upstream_unavailable`），因为宿主已明确禁止访问上游。每个信封都会带上 `meta.offline: true`，让调用方能看到当前策略。 |
+
+Schema 内省：`python3 jabbrv.py schema` → `data.global_env`。每个命令的安全
+等级（`read` / `write` / `destructive`）通过 `data.commands.<name>.mutates`
+暴露。
 
 ## 依赖
 
