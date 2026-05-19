@@ -19,6 +19,7 @@ import io
 import json
 import os
 import re
+import shutil
 import sys
 import time
 import xml.etree.ElementTree as ET
@@ -33,8 +34,15 @@ from urllib.request import Request, urlopen
 # Constants
 # ---------------------------------------------------------------------------
 
-CLI_VERSION = "1.2.0"
-SCHEMA_VERSION = "1.2.0"
+CLI_VERSION = "1.3.0"
+SCHEMA_VERSION = "1.3.0"
+
+# Idempotency keys are used to namespace replay envelopes on disk; restrict to
+# filesystem-safe characters so the key cannot escape the output directory.
+_IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+# Set in main() from --quiet; consulted by ensure_cache() to silence progress.
+_quiet = False
 
 
 def _resolve_cache_dir() -> Path:
@@ -52,6 +60,13 @@ def _is_offline() -> bool:
     JabRef cache still works. Treated as a definitive miss (not transient)
     because the user/system has decided not to consult these sources."""
     return os.environ.get("JABBRV_OFFLINE", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _no_color() -> bool:
+    """https://no-color.org: any non-empty value disables color output. The
+    CLI emits no ANSI today, but the helper is wired so future color paths
+    honor the convention automatically."""
+    return bool(os.environ.get("NO_COLOR", ""))
 
 
 CACHE_DIR = _resolve_cache_dir()
@@ -163,21 +178,25 @@ def _fetch_json(url: str, timeout: int = 15) -> Any:
 # Cache
 # ---------------------------------------------------------------------------
 
-def ensure_cache(verbose: bool = True) -> None:
-    """Download any JabRef CSV files not present on disk. Idempotent.
+def ensure_cache(verbose: bool = True, target_dir: Path | None = None) -> None:
+    """Download any JabRef CSV files not present in `target_dir` (default
+    CACHE_DIR). Idempotent.
 
     Resets `files_failed` and `fetched_this_run` before running so telemetry
-    reflects this invocation only.
+    reflects this invocation only. `target_dir` lets rebuild stage downloads
+    into a sibling directory before atomically swapping it in.
     """
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    dest = target_dir if target_dir is not None else CACHE_DIR
+    dest.mkdir(parents=True, exist_ok=True)
     _cache_stats["files_failed"] = []
     _cache_stats["fetched_this_run"] = 0
+    say = verbose and not _quiet
     for fname in JABREF_FILES:
-        fpath = CACHE_DIR / fname
+        fpath = dest / fname
         if fpath.exists():
             continue
         url = f"{JABREF_BASE}/{fname}"
-        if verbose:
+        if say:
             print(f"  Downloading {fname}...", file=sys.stderr)
         try:
             data = _fetch(url, timeout=30)
@@ -185,7 +204,7 @@ def ensure_cache(verbose: bool = True) -> None:
             _cache_stats["fetched_this_run"] += 1
         except (HTTPError, URLError, TimeoutError) as e:
             _cache_stats["files_failed"].append({"file": fname, "error": str(e)})
-            if verbose:
+            if say:
                 print(f"  Warning: failed to download {fname}: {e}", file=sys.stderr)
 
 
@@ -526,7 +545,11 @@ def process_bib(
 
     written = False
     if not dry_run:
-        out_path.write_text(new_text, encoding="utf-8")
+        # Atomic write: stage under a sibling .partial path, then os.replace.
+        # A crash mid-write leaves the previous output (if any) untouched.
+        tmp_path = out_path.with_name(out_path.name + ".partial")
+        tmp_path.write_text(new_text, encoding="utf-8")
+        os.replace(tmp_path, out_path)
         written = True
 
     return {
@@ -654,6 +677,15 @@ SCHEMA: dict[str, Any] = {
             "type": "bool",
             "description": "Alias for --format json (back-compat).",
         },
+        {
+            "name": "--quiet",
+            "type": "bool",
+            "default": False,
+            "description": "Suppress stderr progress (cache download chatter, warnings). "
+                           "Does not affect the envelope on stdout. Useful when piping into an "
+                           "orchestrator that should see only structured output.",
+            "since": "1.3.0",
+        },
     ],
     "global_env": [
         {
@@ -673,6 +705,15 @@ SCHEMA: dict[str, Any] = {
             "default": "unset (online)",
             "trust": "system",
             "since": "1.2.0",
+        },
+        {
+            "name": "NO_COLOR",
+            "purpose": "https://no-color.org convention: any non-empty value disables color "
+                       "output. The CLI emits no ANSI today, but the variable is honored so "
+                       "future color paths inherit the convention.",
+            "default": "unset (color allowed)",
+            "trust": "system",
+            "since": "1.3.0",
         },
     ],
     "exit_codes": {
@@ -754,6 +795,14 @@ SCHEMA: dict[str, Any] = {
                  "description": "Explicit output path (default: <stem>_abbrev.bib / <stem>_full.bib)"},
                 {"name": "--dry-run", "type": "bool", "default": False,
                  "description": "Preview changes without writing the output file"},
+                {"name": "--idempotency-key", "type": "string", "default": None,
+                 "description": "Opaque token ([A-Za-z0-9._-]{1,64}). When set, the success "
+                                "envelope is cached next to the output file as "
+                                "<output>.<key>.envelope.json. A retried call with the same key "
+                                "returns the cached envelope (meta.idempotent_replay: true) "
+                                "instead of rerunning the rewrite — safe to use after transient "
+                                "network or upstream failures.",
+                 "since": "1.3.0"},
             ],
         },
         "batch": {
@@ -780,11 +829,19 @@ SCHEMA: dict[str, Any] = {
                 {"name": "action", "positional": True, "type": "string", "required": True,
                  "choices": ["status", "update", "rebuild"],
                  "description": "status: inspect cache (read); update: download missing files (write); "
-                                "rebuild: DELETE all cached CSVs and redownload (destructive)"},
+                                "rebuild: atomically replace all cached CSVs with a fresh download "
+                                "(destructive — but old cache is preserved if the download fails)"},
                 {"name": "--dry-run", "type": "bool", "default": False,
                  "description": "For update: list files that would be downloaded. "
                                 "For rebuild: list files that would be deleted and redownloaded. "
                                 "No-op for status. Nothing is written either way."},
+                {"name": "--yes", "type": "bool", "default": False,
+                 "description": "Record explicit destructive intent in meta.confirmed. The CLI "
+                                "never prompts (it is always non-interactive), so --yes does not "
+                                "gate the operation; it lets policy layers and audit logs "
+                                "distinguish 'agent explicitly opted in' from 'agent stumbled "
+                                "into a destructive command name'.",
+                 "since": "1.3.0"},
             ],
         },
         "schema": {
@@ -812,6 +869,8 @@ def _meta(**extra) -> dict:
     }
     if _is_offline():
         m["offline"] = True
+    if _no_color():
+        m["no_color"] = True
     if (
         _cache_stats["files_loaded"]
         or _cache_stats["files_failed"]
@@ -1087,11 +1146,43 @@ def handle_search(args) -> dict:
     )
 
 
+def _bib_output_path(input_path: str, direction: str, output: str | None) -> Path:
+    if output:
+        return Path(output)
+    stem_suffix = "_abbrev" if direction == "abbreviate" else "_full"
+    return Path(input_path).with_stem(Path(input_path).stem + stem_suffix)
+
+
 def handle_bib(args) -> dict:
     err = _validate_input_file(args.path)
     if err:
         return err
     direction = "expand" if args.expand else "abbreviate"
+
+    key = getattr(args, "idempotency_key", None)
+    if key is not None and not _IDEMPOTENCY_KEY_RE.match(key):
+        return envelope_error(
+            "validation_error",
+            "--idempotency-key must match [A-Za-z0-9._-]{1,64}",
+            retryable=False,
+            idempotency_key=key,
+        )
+
+    replay_path: Path | None = None
+    if key and not args.dry_run:
+        out_path = _bib_output_path(args.path, direction, args.output)
+        replay_path = out_path.with_name(f"{out_path.name}.{key}.envelope.json")
+        if replay_path.exists():
+            try:
+                cached = json.loads(replay_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                cached = None
+            if isinstance(cached, dict) and cached.get("ok") is True:
+                meta = cached.setdefault("meta", {})
+                meta["idempotent_replay"] = True
+                meta["idempotency_key"] = key
+                return cached
+
     try:
         result = process_bib(
             args.path,
@@ -1101,7 +1192,22 @@ def handle_bib(args) -> dict:
         )
     except Exception as e:
         return envelope_error("runtime_error", f"process_bib failed: {e}", retryable=False)
-    return envelope_ok(result)
+
+    env = envelope_ok(result)
+
+    if replay_path is not None:
+        # Best-effort cache; failure to persist the envelope does not invalidate
+        # the operation — the rewrite already succeeded.
+        try:
+            replay_path.write_text(
+                json.dumps(env, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            env["meta"]["idempotency_key"] = key
+        except OSError:
+            pass
+
+    return env
 
 
 def handle_batch(args) -> dict:
@@ -1167,32 +1273,70 @@ def handle_cache(args) -> dict:
         })
 
     if action == "rebuild":
+        confirmed = bool(getattr(args, "yes", False))
         existing_csvs = (
             sorted(f.name for f in CACHE_DIR.iterdir() if f.suffix == ".csv")
             if CACHE_DIR.exists() else []
         )
         if dry_run:
-            return envelope_ok({
-                "action": "rebuild",
-                "dry_run": True,
-                "would_delete": existing_csvs,
-                "would_delete_count": len(existing_csvs),
-                "would_download": JABREF_FILES,
-                "would_download_count": len(JABREF_FILES),
-            })
-        for fname in existing_csvs:
-            (CACHE_DIR / fname).unlink()
+            return envelope_ok(
+                {
+                    "action": "rebuild",
+                    "dry_run": True,
+                    "would_delete": existing_csvs,
+                    "would_delete_count": len(existing_csvs),
+                    "would_download": JABREF_FILES,
+                    "would_download_count": len(JABREF_FILES),
+                },
+                meta={"confirmed": confirmed},
+            )
+
+        # Atomic rebuild: stage every download into a sibling directory; only
+        # swap into place if every file succeeded. Partial network failures
+        # leave the existing cache untouched (the previous in-place rebuild
+        # would have deleted everything first and then failed).
+        staging = CACHE_DIR.parent / f"{CACHE_DIR.name}.new"
+        backup = CACHE_DIR.parent / f"{CACHE_DIR.name}.old"
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        if backup.exists():
+            shutil.rmtree(backup, ignore_errors=True)
+
+        ensure_cache(target_dir=staging)
+        failed = list(_cache_stats["files_failed"])
+        if failed:
+            shutil.rmtree(staging, ignore_errors=True)
+            return envelope_error(
+                "upstream_unavailable",
+                f"rebuild aborted: {len(failed)} file(s) failed to download; "
+                "existing cache preserved",
+                retryable=True,
+                action="rebuild",
+                sources=[{"source": f["file"], "error": f["error"]} for f in failed],
+                meta={"confirmed": confirmed},
+            )
+
+        # All files downloaded — swap. os.replace is atomic for empty target;
+        # we move the old dir aside first so the swap window is two renames.
+        if CACHE_DIR.exists():
+            os.rename(str(CACHE_DIR), str(backup))
+        os.rename(str(staging), str(CACHE_DIR))
+        if backup.exists():
+            shutil.rmtree(backup, ignore_errors=True)
+
         _cache = None
-        ensure_cache()
         fta, ata = load_cache()
         _cache = (fta, ata)
-        return envelope_ok({
-            "action": "rebuild",
-            "fetched_this_run": _cache_stats["fetched_this_run"],
-            "files_failed": _cache_stats["files_failed"],
-            "files_missing": _cache_stats["files_missing"],
-            "total_journals": len(fta),
-        })
+        return envelope_ok(
+            {
+                "action": "rebuild",
+                "fetched_this_run": _cache_stats["fetched_this_run"],
+                "files_failed": _cache_stats["files_failed"],
+                "files_missing": _cache_stats["files_missing"],
+                "total_journals": len(fta),
+            },
+            meta={"confirmed": confirmed},
+        )
 
     return envelope_error(
         "validation_error",
@@ -1277,6 +1421,12 @@ def _make_common_parser() -> argparse.ArgumentParser:
         default=argparse.SUPPRESS,
         help="Alias for --format json (back-compat)",
     )
+    common.add_argument(
+        "--quiet",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Suppress stderr progress (cache download chatter); stdout envelope unchanged",
+    )
     return common
 
 
@@ -1296,8 +1446,10 @@ def build_parser() -> argparse.ArgumentParser:
             "Env (set by host, not agent argv):\n"
             "  JABBRV_CACHE_DIR  override the cache directory (default: <install>/cache)\n"
             "  JABBRV_OFFLINE    truthy disables AbbrevISO/NLM; only local cache is used\n"
-            f"CLI {CLI_VERSION}. Run 'jabbrv schema' for the full machine-readable contract.\n"
-            "--format/--json may appear before or after the subcommand."
+            "  NO_COLOR          honored (no ANSI is emitted today)\n"
+            f"CLI {CLI_VERSION}. For the full typed contract of any command,\n"
+            "run 'jabbrv schema <command>' (or 'jabbrv schema' for everything).\n"
+            "--format/--json/--quiet may appear before or after the subcommand."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1311,6 +1463,8 @@ def build_parser() -> argparse.ArgumentParser:
             parents=[common],
             help=cmd_spec["summary"],
             description=cmd_spec["summary"],
+            epilog=f"Full typed schema: jabbrv schema {cmd_name}",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
         )
         for param in cmd_spec["params"]:
             _add_param(sp, param)
@@ -1326,6 +1480,7 @@ def build_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 
 def main() -> int:
+    global _quiet
     parser = build_parser()
     args = parser.parse_args()
 
@@ -1335,6 +1490,9 @@ def main() -> int:
         args.format = "auto"
     if not hasattr(args, "json"):
         args.json = False
+    if not hasattr(args, "quiet"):
+        args.quiet = False
+    _quiet = bool(args.quiet)
 
     if not args.command:
         parser.print_help(sys.stderr)
@@ -1342,10 +1500,11 @@ def main() -> int:
 
     # Back-compat: `update-cache` -> `cache rebuild`
     if args.command == "update-cache":
-        print(
-            "warning: 'update-cache' is deprecated; use 'cache rebuild' instead.",
-            file=sys.stderr,
-        )
+        if not _quiet:
+            print(
+                "warning: 'update-cache' is deprecated; use 'cache rebuild' instead.",
+                file=sys.stderr,
+            )
         args.command = "cache"
         args.action = "rebuild"
 

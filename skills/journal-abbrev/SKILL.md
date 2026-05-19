@@ -5,9 +5,9 @@ allowed-tools: Bash, Read, Write, Edit, Glob, Grep
 # --- Claude Code fields above, OpenClaw/SkillsMP fields below ---
 author: Agents365-ai
 category: Academic Research
-version: 1.2.0
+version: 1.3.0
 created: 2026-03-29
-updated: 2026-05-18
+updated: 2026-05-19
 github: https://github.com/Agents365-ai/journal-abbrev
 homepage: https://github.com/Agents365-ai/journal-abbrev
 metadata:
@@ -38,13 +38,15 @@ Look up journal/magazine name abbreviations using a multi-source cascade: JabRef
 | Preview .bib changes (no write) | `python3 jabbrv.py bib refs.bib --dry-run` |
 | Explicit .bib output path | `python3 jabbrv.py bib refs.bib --output out.bib` |
 | Expand .bib abbreviations | `python3 jabbrv.py bib refs.bib --expand` |
+| Replay-safe .bib (retry returns cached envelope) | `python3 jabbrv.py bib refs.bib --idempotency-key run-001` |
 | Batch text list | `python3 jabbrv.py batch journals.txt` |
 | Batch as NDJSON stream | `python3 jabbrv.py batch journals.txt --stream` |
 | Inspect cache state | `python3 jabbrv.py cache status` |
 | Download missing cache files | `python3 jabbrv.py cache update` |
 | Preview what update would fetch | `python3 jabbrv.py cache update --dry-run` |
-| Rebuild cache from scratch (destructive) | `python3 jabbrv.py cache rebuild` |
+| Atomic rebuild (destructive, with audit marker) | `python3 jabbrv.py cache rebuild --yes` |
 | Preview rebuild (no delete) | `python3 jabbrv.py cache rebuild --dry-run` |
+| Suppress stderr progress | `python3 jabbrv.py --quiet cache update` |
 | Machine-readable CLI contract | `python3 jabbrv.py schema` |
 | Schema for one subcommand | `python3 jabbrv.py schema lookup` |
 
@@ -91,10 +93,26 @@ listing: `python3 jabbrv.py schema` → `data.error_codes`.
 |----------|--------|
 | `JABBRV_CACHE_DIR` | Override the cache directory (default: `<install>/cache`). Useful in sandboxes where the install tree is read-only. |
 | `JABBRV_OFFLINE` | Truthy (`1`/`true`/`yes`/`on`) skips AbbrevISO and NLM; only the local JabRef cache is consulted. Misses become definitive `not_found` (not retryable) since the host has declared upstream off-limits. `meta.offline: true` appears in every envelope so callers can see the policy. |
+| `NO_COLOR` | https://no-color.org convention. Any non-empty value disables color. No ANSI is emitted today; `meta.no_color: true` appears when set so callers can see the policy. |
 
 Trust boundary: these are read from the process environment, not from
 arguments. The host or sandbox sets them; the agent cannot override them via
 argv. Schema introspection: `python3 jabbrv.py schema` → `data.global_env`.
+
+### Retries, idempotency, and destructive intent
+
+- **Branch on `error.code` + `error.retryable`**, not exit code alone. Exit `1`
+  covers both `upstream_unavailable` (retry) and `runtime_error` (retry once,
+  then escalate).
+- **`bib --idempotency-key <token>`** persists the success envelope next to
+  the output file as `<output>.<token>.envelope.json`. A retry with the same
+  key returns that envelope with `meta.idempotent_replay: true` instead of
+  rerunning the rewrite. Token must match `[A-Za-z0-9._-]{1,64}`.
+- **`cache rebuild`** is atomic — downloads stage into a sibling directory
+  and the swap only happens if every file succeeded. If any fails, the
+  existing cache is preserved and the response is `upstream_unavailable`
+  (retryable). Add `--yes` to record `meta.confirmed: true` for audit
+  policies; the CLI itself never prompts, so `--yes` is not a gate.
 
 ## Workflow
 
